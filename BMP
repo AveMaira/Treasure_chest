@@ -1,0 +1,255 @@
+import ctypes
+from PIL import Image
+
+
+class Function:
+    def __init__(self):
+        self.threshold = 3                                    # 启动压缩的阈值，大于这个阈值才有必要压缩
+
+    # 图片压缩
+    def bmp_encode(self, read_filename, write_filename):
+        f_read = open(read_filename, "rb")                    # 以二进制方式读取文件
+        f_write = open(write_filename, "wb")                  # 以二进制方式写入文件
+        buf = b''                                             # 前向缓冲区
+        bufSize = 127 + self.threshold                        # 前向缓冲区大小
+        singleStore = b''                                     # 无匹配的数据暂存区
+        singleStoreSize = 127                                 # 无匹配的数据长度，没有加上阈值是因为匹配数可能小于阈值
+
+        buf = f_read.read(bufSize - len(buf))                 # 尽可能将buf填满
+
+        while len(buf) >= self.threshold:                     # 大于3个字节才有必要压缩
+            curIndex = 0                                      # 当前匹配位置
+            if buf[curIndex] == buf[curIndex + 1]:            # 如果和下一个数据相同
+                if buf[curIndex + 1] == buf[curIndex + 2]:    # 如果往后两个数据都是相同的，启动压缩
+                    curIndex += 1
+                    # 不断向后寻找相同的数据
+                    while ((curIndex + 2) < (len(buf))) and (buf[curIndex + 1] == buf[curIndex + 2]):
+                        curIndex += 1
+                    # 相同的数据搜索完毕，如果之前有无匹配的数据没写入文件，先写入
+                    if singleStore != b'':
+                        f_write.write(bytes(ctypes.c_uint8(len(singleStore))))  # 写入 标记+匹配数
+                        f_write.write(singleStore)  # 写入所有无匹配的数据
+                        singleStore = b''  # 清空暂存区
+                    f_write.write(bytes(ctypes.c_uint8((1 << 7) + curIndex + 2 - self.threshold)))  # 写入 标记+匹配数
+                    f_write.write(bytes(ctypes.c_uint8(buf[0])))  # 写入这个重复出现的数据
+                else:
+                    singleStore += buf[curIndex: curIndex + 2]  # 将2个不能匹配的数据加入暂存区
+
+                buf = buf[curIndex + 2:]  # 从buf里清掉已经处理过的数据
+            else:
+                singleStore += buf[curIndex: curIndex + 1]  # 将1个不能匹配的数据加入暂存区
+                buf = buf[curIndex + 1:]  # 从buf里清掉已经处理过的数据
+
+            # 无匹配的数据存满了暂存区需要写入一次文件
+            if len(singleStore) >= singleStoreSize:
+                f_write.write(bytes(ctypes.c_uint8(singleStoreSize)))  # 写入 标记+匹配数
+                f_write.write(singleStore[0:singleStoreSize])  # 写入bufSize个无匹配的数据
+                singleStore = singleStore[singleStoreSize:]  # 从暂存区里清掉已经处理过的数据
+
+            buf += f_read.read(bufSize - len(buf))  # 尽可能将buf填满
+
+        singleStore += buf  # 将前向缓冲区里剩余的数据加入无匹配数据暂存区
+
+        if len(singleStore) >= singleStoreSize:
+            f_write.write(bytes(ctypes.c_uint8(singleStoreSize)))  # 写入 标记+匹配数
+            f_write.write(singleStore[0:singleStoreSize])  # 写入bufSize个无匹配的数据
+            singleStore = singleStore[singleStoreSize:]  # 从暂存区里清掉已经处理过的数据
+
+        if singleStore != b'':
+            f_write.write(bytes(ctypes.c_uint8(len(singleStore))))
+            f_write.write(singleStore)
+
+        f_read.close()
+        f_write.close()
+
+    # 图片解压缩
+    def bmp_decode(self, read_filename, write_filename):
+        f_read = open(read_filename, "rb")                 # 以二进制方式读取文件
+        f_write = open(write_filename, "wb")               # 以二进制方式写入文件
+
+        sign = f_read.read(1)  # 读取标记字节
+        while sign != b'':
+            if sign[0] >= (1 << 7):  # 如果是压缩标记
+                f_write.write(f_read.read(1) * (sign[0] - (1 << 7) + self.threshold))  # 解压释放数据
+            else:  # 如果不是压缩标记
+                buf = f_read.read(sign[0])  # 读取无匹配的所有数据
+                f_write.write(buf)  # 写入无匹配的数据
+
+            sign = f_read.read(1)  # 读取下一个标记字节
+
+        f_read.close()
+        f_write.close()
+
+
+if __name__ == '__main__':
+
+    def bytes2int(bytes):
+        intData = []
+        for b in bytes:
+            intData.append(b)
+        intData = intData[::-1]
+        intData = int.from_bytes(intData, byteorder='big', signed=False)
+        return intData
+
+
+    img = Image.open('original-Image.bmp')
+
+    Img = img.convert('L')  # 模式“L”为灰色图像，它的每个像素用8个bit表示，0表示黑，255表示白，其他数字表示不同的灰度。
+    Img.save("Grayscale-Image.bmp")
+
+    threshold = 127         # 自定义灰度界限，大于这个值为黑色，小于这个值为白色
+
+    table = []
+    for i in range(256):
+        if i < threshold:
+            table.append(0)
+        else:
+            table.append(1)
+
+    # 图片二值化
+    photo = Img.point(table, '1')
+    photo.save("Binary-Image.bmp")
+
+    # bmp图像路径
+    imageFile = r'Binary-Image.bmp'
+
+    # 读取bmp图像文件
+    # f.read()获得图像的信息
+    f = open(imageFile, 'rb')
+    content = f.read()
+    # print(type(content))
+
+    # bmp图像格式：
+    # 1、位图文件头 14 Bytes
+    # 2、位图信息头 40 Bytes
+    # 3、位图调色板
+    # 4、位图数据，就是图像信息
+    
+    BMP_fileHEADER = content[0:14]   # 文件头
+    BMP_infoHEADER = content[14:54]  # 信息头
+
+    # 位图文件头
+    print('文件头:')
+    bfType = BMP_fileHEADER[:2]                  # 文件标志符  必须是'BM'
+    bfSize = BMP_fileHEADER[2:6]                 # 该文件大小  注意：低位表示低位，高位表示高位 以B为单位
+    bfReserved1 = BMP_fileHEADER[6:8]            # 保留，设置为0
+    bfReserved2 = BMP_fileHEADER[8:10]           # 保留，设置为0
+    bfOffBits = BMP_fileHEADER[10:]              # 文件起始到图像数据的字节偏移量  注意：低位表示低位，高位表示高位 以B为单位
+
+    print('文件标注符:', bfType)
+    size = bytes2int(bfSize) / 1000
+    print('文件大小:', str(size) + 'KB')
+    print('预留区域1:', bfReserved1)
+    print('预留区域1:', bfReserved2)
+    offset = bytes2int(bfOffBits)
+    print('起始位置到图像数据区的偏移量:', str(offset) + 'B')
+    print('===============================================================')
+    print()
+
+    # 位图信息头
+    print('信息头:')
+    biSize = BMP_infoHEADER[:4]                # 此信息头的大小 (14-17字节)
+    biWidth = BMP_infoHEADER[4:8]              # 图像的宽  (18-21字节)
+    biHeight = BMP_infoHEADER[8:12]            # 图像的高  (22-25字节)
+    biPlanes = BMP_infoHEADER[12:14]           # 表示bmp图片的平面属，显然显示器只有一个平面，所以恒等于1 (26-27字节)
+    biBitCount = BMP_infoHEADER[14:16]         # 一像素所占的位数，(28-29字节)当biBitCount=24时，该BMP图像就是24Bit真彩图，没有调色板。
+    biCompression = BMP_infoHEADER[16:20]      # 说明图象数据压缩的类型，0为不压缩。 (30-33字节)
+    biSizeImage = BMP_infoHEADER[20:24]        # 像素数据所占大小, 这个值应该等于上面文件头结构中bfSize-bfOffBits (34-37字节)
+    biXPixelsPerMeter = BMP_infoHEADER[24:28]  # 说明水平分辨率，用像素/米表示。一般为0 (38-41字节)
+    biYPixelsPerMeter = BMP_infoHEADER[28:32]  # 说明垂直分辨率，用像素/米表示。一般为0 (42-45字节)
+    biClrUsed = BMP_infoHEADER[32:36]          # 说明位图实际使用的彩色表中的颜色索引数（设为0的话，则说明使用所有调色板项）(46-49字节)
+    biClrImportant = BMP_infoHEADER[36:40]     # 说明对图象显示有重要影响的颜色索引的数目，如果是0，表示都重要。(50-53字节)
+
+    bSize = bytes2int(biSize)
+    print('信息头大小:', str(bSize) + 'B')
+
+    bWidth = bytes2int(biWidth)
+    print('图像宽度:', bWidth)
+
+    bHeight = bytes2int(biHeight)
+    print('图像高度:', bHeight)
+
+    bPlanes = bytes2int(biPlanes)
+    print('图像数据平面(总为1):', bPlanes)
+
+    bBitCount = bytes2int(biBitCount)
+    print('图像位数:', bBitCount)
+
+    bCompression = bytes2int(biCompression)
+    print('文件的压缩形式(为0表示不压缩):', bCompression)
+
+    bSizeImage = bytes2int(biSizeImage) / 1000
+    print('图像的大小:', bSizeImage)
+
+    bXPerMeter = bytes2int(biXPixelsPerMeter)
+    print('水平分辨率(像素/米):', bXPerMeter)
+
+    bYPerMeter = bytes2int(biYPixelsPerMeter)
+    print('垂直分辨率(像素/米):', bYPerMeter)
+
+    bClrUsed = bytes2int(biClrUsed)
+    print('实际使用的调色板索引数:(0表示使用所有的调色板索引)', bClrUsed)
+
+    bClrImportant = bytes2int(biClrImportant)
+    print('用到的重要的调色板索引数:(0表示重要)', bClrImportant)
+    print('===============================================================')
+    print()
+
+    # 位图调色板
+    print('调色板:')
+    """
+       当biBitCount=1时，为2色图像，BMP位图中有2个数据结构rgbQUAD，一个调色板占用4字节数据，所以2色图像的调色板长度为2*4为8字节
+       当biBitCount=8时，为256色图像，BMP位图中有256个数据结构rgbQUAD，
+       一个调色板占用4字节数据，所以256色图像的调色板长度为256*4为1024字节
+    """
+    rgbQUAD = content[54:62]
+    rgbBlue_1 = rgbQUAD[0]
+    rgbGreen_1 = rgbQUAD[1]
+    rgbRed_1 = rgbQUAD[2]
+    rgbReserved_1 = rgbQUAD[3]
+    rgbBlue_2 = rgbQUAD[4]
+    rgbGreen_2 = rgbQUAD[5]
+    rgbRed_2 = rgbQUAD[6]
+    rgbReserved_2 = rgbQUAD[7]
+
+    """
+       0 0 0表示黑色
+       255 255 255表示白色
+       因为我们的测试图片是二值图  不难得到调色板只有这两种情况
+    """
+    print('调色板1:')
+    print(rgbBlue_1, rgbGreen_1, rgbRed_1)      
+    print('调色板2:')
+    print(rgbBlue_2, rgbGreen_2, rgbRed_2)
+    print('===============================================================')
+    print()
+
+    # 位图图像数据区
+    print('图像数据区:')
+    # 当biBitCount=1时，8个像素占1个字节
+    # 当biBitCount=8时，1个像素占1个字节
+    # 当biBitCount=24时,1个像素占3个字节
+    imageData = content[62:]
+    dataLength = len(imageData)  # 图像数据区的字节数
+    print('图像数据区字节数:', dataLength)
+    pixel = ''
+    for i in range(dataLength):
+        B = bin(imageData[i])[2:]  # 这里要判断,不够8位,高位补0
+        if len(B) == 8:
+            pass
+        else:
+            for j in range(8 - len(B)):
+                B = '0' + B
+        pixel += B
+    print('图像数据区的二进制数个数:', len(pixel))
+    print('===============================================================')
+    print()
+
+    run = Function()
+    run.bmp_encode('Binary-Image.bmp', 'bmpZip.bmp')
+    print('压缩的文件:bmpZip.bmp')
+    print('---------------压缩完成--------------------')
+
+    run.bmp_decode('bmpZip.bmp', 'bmpUnzip.bmp')
+    print('解压缩的文件:bmpUnzip.bmp')
+    print('--------------解压缩完成-------------------')
